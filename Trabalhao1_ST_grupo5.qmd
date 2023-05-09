@@ -3,7 +3,7 @@ title: "Trabalho Prático 1"
 subtitle: "Séries Temporais - 1/2023" 
 author:
   - Carolina Musso 18/0047850
-  - Gabriela Carneiro de Almeida
+  - Gabriela Carneiro de Almeida 18/0120816
   - Renan Menezes de Araujo
 format: 
   pdf:
