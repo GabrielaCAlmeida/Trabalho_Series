@@ -1,0 +1,541 @@
+---
+title: "Trabalho Prático 2"
+subtitle: "Análise de Séries Temporais - 1/2023" 
+author:
+  - Ana Tércia Freires da Silva - 
+  - Gabriel Véras Monteiro - 19/0106794
+  - Gabriela Carneiro de Almeida - 18/0120816
+format: 
+  pdf:
+    toc: true
+    keep-tex: true
+    include-in-header:
+      text: |
+        \usepackage[auth-lg]{authblk}
+execute:
+  echo: false
+  message: false
+  warning: false
+---
+
+{{< pagebreak >}}
+
+# Introdução: série selecionada, características e decomposição
+
+```{r pacotes}
+if(!("pacman" %in% installed.packages())){install.packages("pacman")}
+
+pacman::p_load(Mcomp, tidyverse, forecast, fpp2, xts, tseries, tidymodels, car)
+```
+
+```{r selecao-dados}
+# T2 -> 1891 
+
+data(M3) #carrega os dados
+id <- 1891 #série temporal escolhida
+
+serie <- M3[[id]]
+
+dados <- serie$x
+```
+
+A série temporal escolhida foi a de número *id* correspondente a `r id`. De acordo com a definição do próprio pacote, refere-se a *`r serie$description`*. Foram realizadas medidas mensais de 1982 a 1992 e o horizonte de previsão requerido é das 18 ocorrências seguintes.
+
+O gráfico da série, com *in* e *out-sample*, é exposto a seguir.
+
+```{r plot-serie-total}
+
+plot(serie, main = "Série Temporal M3-1891")
+```
+
+Após visualização inical da série, foi feita sua decomposição via MSTL. Foram feitas duas decomposições, uma ajustando *lambda = "auto"* e *lambda = NULL*, resultando em duas composições muito similares.
+
+```{r decomposicao-mstl}
+
+serie_ms <- forecast::msts(dados, seasonal.periods = c(12))
+
+# Fizemos a decomposição MSTL ajustando lambda = "auto" e lambda = NULL, mas não parece fazer qualquer diferença
+
+decomp_mstl1 <- mstl(serie_ms, lambda = NULL, t.window = 7)
+
+
+decomp_mstl2 <- mstl(serie_ms, lambda = "auto", t.window=7 )
+
+decomp_mstl1 %>% autoplot(main = "Decomposição MSTL com período anual simples (Lambda = NULL)")
+
+decomp_mstl2 %>% autoplot(main = "Decomposição MSTL com período anual simples (Lambda = auto)")
+```
+
+Aplicando a decomposição MSTL com sazonalidade anual, é possível visualizar uma tendência de crescimento no inicio das medições, passando por uma estabilização e posterior decrescimento. Ao final, a série parece retomar um pequeno crescimento. Além disso, é possível notar que a série tem um componente sazonal mensal, com ciclos claros. Por fim, o ruído parece se aproximar de um padãr de ruído branco.
+
+# Modelos ARIMA: seleção, transformações e resíduos
+
+## Sem transformação de Box-Cox
+
+```{r diff}
+
+kpss.test(serie_ms) # Não Estacionária
+ndiffs(serie_ms) # Necessária 1 diferença
+serie_ms %>% diff() %>% nsdiffs() # É necessária remoção sazonal
+
+serie_ms_diff <- serie_ms %>% diff() %>% diff(lag = 12)
+```
+
+```{r testes na serie diferenciada}
+
+kpss.test(serie_ms_diff)
+
+```
+
+Inicialmente foi feito o teste de estacionaridade KPSS na série segundo as hipóteses:
+
+```{=tex}
+\begin{align}
+  \begin{cases}
+    H_0:\text{O processo é estacionário}\\
+    H_1: \text{O processo possui raiz unitária}\\
+  \end{cases}
+\end{align}
+```
+O teste indica que a série não é estacionária (p-valor = 0,03544), portanto, é necessário aplicar diferenciações para tornar a série estacionária antes de ajustar um modelo adequado que se ajuste a série em análise. O número de diferenciações simples necessárias é igual a um, dessa forma, a estimativa para *'d'* do modelo SARIMA é de *'d' = 1*.
+Além disso, em se tratanto de uma série sazonal, é necessário verificar o número de diferenciações sazonais para retirar o efeito da sazonalidade. Analogamente, foi obtido o valor de uma diferenciação sazonal necessária, se tratando, portanto, do *'D'* do modelo SARIMA, sendo *'D' = 1*. Para a diferenciação sazonal, pelo ciclo sazonal ser igual a 12, é necessário a utilização do lag sazonal igual a 12 (lag = 12).
+
+```{r grafico série diferenciada}
+plot(serie_ms_diff)
+
+kpss.test(serie_ms_diff)
+```
+O gráfico acima mostra o comportamento da série após as diferenciações simples e sazonal. A série aparenta ter comportamento estácionário, o que foi confirmado a partir da aplicação do teste KPSS, cujas hipóteses já foram explicitadas anteriormente. Por meio do teste foi possível notar que a série realmente está estacionária após as diferenciações (p-valor = 0,1), dessa forma, é possível proseguir com o procedimento de seleção do modelo. 
+
+Para tal, se segue a análise dos gráficos ACF e PACF.
+
+```{r acf-pacf-sem-transformacao BoxCox, fig.height=3, fig.width = 8}
+# Graficos de Autocorrelacao
+par(mfrow=c(1,3))
+plot(serie_ms_diff, main="Série diferenciada",ylab="")
+acf(serie_ms_diff, lag=12*6, main="ACF")
+pacf(serie_ms_diff, lag=12*6, main="PACF")
+```
+É possível perceber que no ACF há uma quebra no primeiro lag simples, ao passo que ocorre uma quebra no segundo lag do PACF. Porém, nenhum dos gráficos apresenta comportamento bem definido, dificultando a determinação do restante dos parâmetros do modelo SARIMA. Nesse contexto, foi feito a combinação dos valores de *p* e *q*, entre 0 e 2, e de *P* e *Q*, nos valores 0 ou 1, desconsiderando quando *p* e *q* fossem zero simultaneamente e, analogamente, para *P* e *Q*. O melhor modelo, criado pelas combinações de valores explicitados acima, foi selecionado segundo o menor valor de AICc. 
+
+```{r seleção}
+
+melhor_AICc = Inf
+for(P in 0:1){
+  for(Q in 0:1){
+    for(p in 0:3){
+      for(q in 0:3){
+        fit = Arima(serie_ms,order=c(p,1,q),seasonal=c(P,1,Q))
+        if(fit$aicc < melhor_AICc){
+          melhor_AICc = fit$aicc
+          cat("p =",p,", d = 1, q =",q,", P = ",P,", D = 1, Q = ",Q,", AICc =", fit$aicc, "\n")
+        }
+      }
+    }
+  }
+} 
+
+melhor_AICc
+```
+
+A partir dos AICc, o modelo selecionado foi $SARIMA(2,1,0)(0,1,1)_{12}$, assim, pode-se prosseguir com a análise dos resíduos.
+
+```{r análise de resíduos - sem box-cox}
+
+fit = Arima(serie_ms,order = c(2,1,0),seasonal=c(0,1,1))
+
+par(mfrow = c(1,1))
+Res <- fit$residuals
+plot(Res)# resíduos com zeros na inicialização
+```
+
+É notável que há uma sequência de resíduos iguais a zero no início da série, e estes podem afetar as análises, dessa forma, os zeros foram desconsiderados, sendo feita análise de resíduos de um ano após o início da série, dados pela figura a seguir:
+
+```{r análise de resíduos - sem box-cox e sem zeros}
+
+fit$residuals %>% window(start = c(1983,1)) %>% plot()  ## Saltando 1 ano no início
+
+E <- fit$residuals %>% window(start = c(1983,1))
+#Kpss
+tseries::kpss.test(E)
+```
+
+Os resíduos aparentam ser estacionários, com média 0 e com 
+variância constante. Agora, foi testada a estacionariedade com um teste KPSS, cujas as hipóteses já foram mencionadas. Como resultado, obtem-se que o processo é estacionário (p-valor > 0, 1).
+
+Além disso, a partir do gráfico do ACF, mostrado abaixo, pode-se verificar a independência dos resíduos.
+
+```{r}
+#Independencia dos resíduos
+acf(E, lag.max=12*5)
+```
+
+Observamos que praticamente todos os valores das autocorrelações não são significantes, indicando a independência dos resíduos, o que necessita a confirmação pelo teste de Ljung-Box, com base nas hipóteses:
+
+```{=tex}
+\begin{align}
+  \begin{cases}
+    H_0:\text{Todas as correlações são iguais a zero}\\
+    H_1: \text{Ao menos uma correlação é diferente de zero}\\
+  \end{cases}
+\end{align}
+```
+
+Assim, utilizando o teste com 20 graus de liberdade, obteve-se p-valor de 0, 8923, e para 15, obteve-se 0, 8741, dessa maneira, utilizando o α = 0, 05, não se rejeita H0, corroborando com a análise gráfica de que os resíduos são independentes.
+Então, pode-se testar a normalidade, primeiramente, por meio de uma representação gráfica.
+
+```{r}
+#normalidade
+qqnorm(E)
+qqline(E)
+qqPlot(E)
+shapiro.test(E)
+
+#
+Box.test(E, lag=20, type = "Ljung-Box")
+
+fit$coef
+var(E)
+```
+
+Assim, pela imagem, com envelope de 95%, é basicamente certa a normalidade dos resíduos, para confirmar, é conduzido o teste de Shapiro-Wilk, sob hipóteses:
+
+```{=tex}
+\begin{align}
+  \begin{cases}
+    H_0:\text{Os resíduos seguem distribuição normal}\\
+    H_1: \text{Os resíduos não seguem distribuição normal}\\
+  \end{cases}
+\end{align}
+```
+
+Assim, com nível de significância de 0, 05, o teste de Shapiro-Wilk confirma que os resíduos estão distribuidos segundo uma distribuição normal.
+
+## Com transformação de Box-Cox
+
+
+```{r}
+## Com transformação Boxcox
+lamb <- serie_ms %>% BoxCox.lambda() 
+x2 <- serie_ms %>% BoxCox(lamb) 
+
+# Plotando juntamente à série original
+# par(mfrow = c(1,2))
+# x %>% plot()
+x2 %>% plot()
+```
+Percebe-se grande similaridade com a série original, e, pode-se prosseguir da mesma maneira que anteriormente com o procedimento de seleção. Primeiramente, testando a estacionariedade da série com o teste KPSS a un nível de significância de 5%, é possível concluir que a série não é estacionária (p-valor = 0, 03658). Dessa maneira, analogamente à análise da série sem a transformação Box-Cox, é necessário aplicar 1 diferenciação simples e de uma diferenciação sazonal para tornar a série estácionária, sendo  d = 1 e  D = 1. Da mesma maneira que na análise anterior, foi utilizado um sazonal de 12 para a diferenciação sazonal, dessa maneira, a série diferenciada é a que se segue:
+
+
+```{r}
+## Agora, prosseguir da mesma maneira à sem transformação
+# Testar a Estacionariedade da série 
+kpss.test(x2) # Não Estacionária
+x2 %>%  ndiffs() # Necessária 1 diferença
+x2 %>% diff() %>% nsdiffs() # É necessária remoção sazonal
+
+auto.arima(x2)
+
+## Portanto, pode-se utilizar o lag = 12 na diferenciação sazonal
+diff_bc <- x2 %>% diff() %>% diff(lag = 12)
+kpss.test(diff_bc)
+```
+
+
+```{r}
+## Agora, sendo estacionária:
+
+par(mfrow=c(1,3))
+plot(diff_bc)
+acf(diff_bc, lag.max = 12*6)  
+pacf(diff_bc, lag.max = 12*6)
+
+```
+
+Assim ficou a série a partir de 1 diferenciação simples e sazonal. Agora, analogamente à série sem transformação, é possível observar que a série tem aparência estacionária, o que deve ser confirmado novamente a partir do teste de KPSS de sob hipóteses já explicitadas. Assim, a partir de um p-valor maior que 0.1, pôde-se confirmar que a série diferenciada é estacionária e que é possível prosseguir com o procedimento de seleção.
+
+```{r}
+# Sabendo-se que houve diferenciação na parte sazonal e não sazonal (d e D):
+melhor_AICc = Inf
+for(P in 0:1){
+  for(Q in 0:1){
+    for(p in 0:3){
+      for(q in 0:3){
+        fit = Arima(x2,order = c(p,1,q),seasonal = c(P,1,Q))
+        if(fit$aicc < melhor_AICc){
+          melhor_AICc = fit$aicc
+          cat("p =",p,", d = 1, q =",q,", P = ",P,", D = 1, Q = ",Q,", AICc =", fit$aicc, "\n")
+        }
+      }
+    }
+  }
+} 
+
+melhor_AICc
+```
+Assim, pode-se observar comportamento similar ao da série sem a transformação de Boxcox. Nesse sentido, no gráfico ACF há uma quebra no primeiro lag simples, ao passo que há uma quebra no segundo lag no gráfico PACF.
+Nenhum dos gráficos apresentou comportamento bem definido.Para os lags sazonais, percebem-se valores significativos apenas no primeiro lag, sendo assim, os valores de p e q serão testados entre 0 e 2, já P e Q, nos valores 0 ou 1, desconsiderando quando p e q forem 0 simultaneamente, e analogamente para P e Q.
+A partir dos AICc, observou-se o melhor menor valor de 2506, 5 e assim, o modelo ajustado foi um SARIMA$(2, 1, 0)(0, 1, 1)_{12}$, assim com no ajuste de modelo sem utilização da transformação de Box-Cox.
+
+Seguindo para análise dos resíduos, é possível observar que há uma sequência de resíduos iguais a zero no início da série.
+
+```{r}
+
+## Portanto, o melhor modelo é um SARIMA(2,1,0)(0,1,1), da mesma maneira da forma sem transformação
+fit_2 = Arima(x2,order = c(2,1,0),seasonal = c(0,1,1))
+par(mfrow=c(1,1))
+Res_2 <- fit_2$residuals
+plot(Res_2) # resíduos com zeros na inicialização
+```
+
+Assim, analogamente à série sem transformação, serão considerados apenas os resíduos um ano após o início das observações, dados pela figura a seguir:
+
+
+```{r}
+fit_2$residuals %>% window(start = c(1983,1)) %>% plot()  ## Saltando 1 ano no início
+```
+
+Agora, os residuos aparentam estacionariedade graficamente, mas para testear realmente, utiliza-se o teste de KPSS. O teste mostra que os resíduos são, de fato, estácionários (p-valor > 0, 1). Além disso, pode-se visualizar pelo gráfico do ACF, a independência dos resíduos:
+
+
+```{r}
+E_2 <- fit_2$residuals %>% window(start=c(1983,1))
+acf(E, lag.max=12*5, main = "ACF dos resíduos (Box-COx)")
+
+```
+Assim, de maneira análoga à vista na série sem transformação de Box-Cox, basicamente não há valores significativos, e, para realmente confirmar independência, utiliza-se novamente
+o teste do tipo Ljung-Box. Assim, com 20 graus de liberdade, o
+p-valor foi de 0, 86, e com 15 graus, o p-valor resultou em 0.8443, portanto, para um nível de significância de 5%, não se rejeita H0, indicando que a suspeita após a análise gráfica estava correta, e os resíduos realmente são independentes. 
+Por fim, pode-se prosseguir com a análise da normalidade dos resíduos, por meio da análise gráfica primeiramente.
+
+```{r}
+qqnorm(E_2)
+qqline(E_2)
+qqPlot(E_2)
+shapiro.test(E_2)
+
+tseries::kpss.test(E_2)
+Box.test(E_2, lag=20, type = "Ljung-Box")
+
+fit_2$coef
+var(E_2)
+```
+A partir da análise gráfica, é possível observar indicação de normalidade dos resíduos. Seguindo com o teste de Shapiro-Wilk, há evidências de que os resíduos seguem distribuição normal (p-valor=0, 7513).
+
+# Modelos ETS: seleção, transformações e resíduos
+
+
+```{r selecao-ETS-sem-transf}
+# monta as combinações possíveis de modelo ets
+modelos_possiveis <- expand_grid(v1 = c("A", "M", "N"), v2 = c("A", "M", "N"), v3 = c("A", "M", "N")) %>%
+  mutate(modelo = str_c(v1,v2,v3)) %>%
+  select(modelo) %>%
+  unique() %>%
+  expand_grid(., damp = c(TRUE, FALSE))
+# N, A, M, + damped
+
+
+#funcao pra montar indicadores do modelo
+criterios <- function(modelo, damp) { 
+  ETS <- ets(dados, model = modelo, damped = damp)
+  #usamos o objeto dados como um padrao
+  
+  tabela <- tibble(
+    nome = modelo,
+    sigla = str_c("ETS(", str_c(substr(modelo,1,1),  substr(modelo,2,2), substr(modelo,3,3), sep = ","), ")"),
+    damped = damp,
+    AIC = ETS$aic, 
+    AICc = ETS$aicc, 
+    BIC = ETS$bic)
+  
+  return(tabela)
+}
+
+
+#selecionando modelos permitidos pela funcao ets
+# for(i in 1:length(model$modelo)){
+#   print(i)
+#   print(try({ets(dados, model = model$modelo[i], damped = model$damp[i])}, silent = TRUE))
+# }
+
+selec <- c(1, 2, 5, 6, 14, 18:24, 27:30, 32, 34, 36)
+
+model_select <- modelos_possiveis[selec,]
+
+tabela_modelos_ETS <- map2_df(model_select$modelo, model_select$damp, criterios) %>%
+  arrange(AIC) %>%
+  mutate(modelo = case_when(
+    damped == TRUE ~ str_replace(sigla, ",A", ",Ad"),
+    .default = sigla
+  ))
+
+tabela_modelos_ETS %>%
+  select("Modelo"= modelo, AIC:BIC)%>%
+  head(10) %>%
+  knitr::kable(
+    format = "latex",
+    align = c("lccc"),
+    booktabs = TRUE,
+    longtable = TRUE,
+    linesep = "",
+    escape = FALSE,
+    digits = 2
+    ) %>%
+  kableExtra::kable_styling(
+      position = "center",
+      latex_options = c("striped", "repeat_header"),
+      stripe_color = "gray!15")
+
+```
+
+```{r melhor-fit-ETL-sem-transf}
+
+# ETS sem transformacao ----
+fit_ets <- ets(dados, model = "AAA", damped = TRUE)
+
+plot(fit_ets)
+
+```
+
+### Resíduos
+
+```{r residuos-ets-sem-transform}
+
+# Análise de resíduos ETS sem transformação
+E_1_ets <- fit_ets$residuals
+par(mfrow=c(1,3))
+plot(E_1_ets)
+acf(E_1_ets)
+pacf(E_1_ets)
+
+```
+
+
+```{r }
+qqnorm(E_1_ets)
+qqline(E_1_ets)
+
+# # Testes para ETS sem transformação
+p_valor <- c(shapiro.test(E_1_ets)$p.value,kpss.test(E_1_ets)$p.value,
+Box.test(E_1_ets,lag=15,type="Ljung-Box",fitdf=3)$p.value)
+Estatistica <- c(shapiro.test(E_1_ets)$statistic,kpss.test(E_1_ets)$statistic,
+Box.test(E_1_ets,lag=15,type="Ljung-Box",fitdf=3)$statistic)
+Teste <- c("Normalidade","Estacionariedade","Independencia")
+tab_1_ets <- data.frame(Estatistica,p_valor)
+knitr::kable(tab_1_ets)
+```
+
+## Modelo com transformação
+
+### Seleção
+
+a série com transformacao
+
+```{r ETS-com-transf}
+# avalia valor de lambda da transformacao boxcox
+lambda <- dados %>% BoxCox.lambda()
+
+dados_box <- dados %>% BoxCox(lambda)
+
+# visualização e decomp da ETS com transformação
+plot(dados_box,main= parse(text = paste0('"Série com transformação Box-Cox  "', '~ lambda == ', round(lambda, 3))))
+
+```
+
+selecao do modelo com transformação
+
+```{r selecao-ETS-com-transformacao}
+# for(i in 1:length(model$modelo)){
+#   print(i)
+#   print(try({ets(dados_box, model = model$modelo[i], damped = model$damp[i])}, silent = TRUE))
+# }
+
+selec_transf <- c(1, 2, 5, 6, 14, 18, 19:24, 27:30, 32, 34, 36)
+
+model_select_transf <- modelos_possiveis[selec_transf,]
+
+tabela_modelos_ETS_transf <- map2_df(model_select_transf$modelo, model_select_transf$damp, criterios) %>%
+  arrange(AIC) %>%
+  mutate(modelo = case_when(
+    damped == TRUE ~ str_replace(sigla, "A", "Ad"),
+    .default = sigla
+  ))
+
+tabela_modelos_ETS_transf %>%
+  select("Modelo transformado"= modelo, AIC:BIC)%>%
+  head(10) %>%
+  knitr::kable(
+    format = "latex",
+    align = c("lccc"),
+    booktabs = TRUE,
+    longtable = TRUE,
+    linesep = "",
+    escape = FALSE,
+    digits = 2
+    ) %>%
+  kableExtra::kable_styling(
+      position = "center",
+      latex_options = c("striped", "repeat_header"),
+      stripe_color = "gray!15")
+```
+
+OS MODELOS SAO OS MESMO, PODEMO SELECIONAR O SEGUNDO MELHOR
+
+
+### Resíduos
+
+```{r resíduos-modelo-transformado}
+# decomposicao ETS sem transformacao ----
+fit_ets_trans <- ets(dados_box, model = "AAA", damped = TRUE)
+
+plot(fit_ets_trans)
+
+```
+```{r}
+
+# Análise de resíduos ETS sem transformação
+E_2_ets <- fit_ets_trans$residuals
+par(mfrow=c(1,3))
+plot(E_2_ets)
+acf(E_2_ets)
+pacf(E_2_ets)
+
+```
+```{r}
+qqnorm(E_2_ets)
+qqline(E_2_ets)
+
+# # Testes para ETS sem transformação
+p_valor <- c(shapiro.test(E_2_ets)$p.value,kpss.test(E_2_ets)$p.value,
+Box.test(E_2_ets,lag=15,type="Ljung-Box",fitdf=3)$p.value)
+Estatistica <- c(shapiro.test(E_2_ets)$statistic,kpss.test(E_2_ets)$statistic,
+Box.test(E_2_ets,lag=15,type="Ljung-Box",fitdf=3)$statistic)
+Teste <- c("Normalidade","Estacionariedade","Independencia")
+tab_2_ets <- data.frame(Estatistica,p_valor)
+knitr::kable(tab_2_ets)
+```
+
+
+# Estudo de desempenho preditivo
+
+## Resultados da Janela Deslizante
+
+## Performance em relação aos horizontes de previsão
+
+### ARIMA
+
+### ETS
+
+# Resultados
+
+apresente em tabelas e gráficos as previsões dos 4 modelos selecionados e também apresente em uma tabela os resultados de acurácia dos 4 modelos selecionados e dos modelos benchmarks. Comente os resultados de modo objetivo;
+
+# Apêndice
+
+Todo o projeto de composição deste documento pode ser encontrado aqui: https://github.com/cesar-galvao/trabalhos_series
+
+```{r codigo, eval = FALSE, echo = TRUE}
+
+
+
+```
