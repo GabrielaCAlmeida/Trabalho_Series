@@ -2,7 +2,7 @@
 title: "Trabalho Prático 2"
 subtitle: "Análise de Séries Temporais - 1/2023" 
 author:
-  - Ana Tércia Freires da Silva - 
+  - Ana Tércia Freires da Silva - 19/0044730
   - Gabriel Véras Monteiro - 19/0106794
   - Gabriela Carneiro de Almeida - 18/0120816
 format: 
